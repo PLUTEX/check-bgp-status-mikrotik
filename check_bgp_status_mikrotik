@@ -1,0 +1,152 @@
+#! /usr/bin/env bash
+# 2016, Paul PLUTEX <info@plutex.de>.
+# All rights reserved.
+
+# Redistribution and use in source and binary forms, with or without modification, are
+# permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this list of
+#   conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice, this list
+#   of conditions and the following disclaimer in the documentation and/or other materials
+#   provided with the distribution.
+#
+# * The names of its contributors may not be used to endorse or promote products derived
+#   from this software without specific prior written permission.
+#
+# * Feel free to send Club Mate to support the work.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
+# OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+# AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
+# AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+# OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+# Set PATH to save default
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Default states
+declare -i STATE_OK=0
+declare -i STATE_WARNING=1
+declare -i STATE_CRITICAL=2
+declare -i STATE_UNKNOWN=3
+
+# Initialize variables for offset checking
+declare -i OFFSET_CRITICAL=0
+declare -i OFFSET_WARNING=0
+
+# Initialize status variable
+declare -i ERR_CODE=$STATE_OK
+
+# Initialize variable to check if content is retrieved
+declare -i GOT_CONTENT=0
+
+# Initialize variables for counting
+declare -i BGP_SESSIONS_DOWN=0
+declare -i BGP_SESSIONS_DISABLED=0
+declare -i BGP_SESSIONS_TOTAL=0
+
+# Initialize error variable
+ERR_MSG=''
+
+# Initialize variables for credentials
+MIKROTIK_ROUTER=''
+MIKROTIK_USERNAME=''
+
+# Parse arguments
+for ARG in "$@"; do
+  if [ "$ARG" = '-h' -o "$ARG" = '--help' ]; then
+    show_help
+  elif [[ "$ARG" =~ ^--router= ]]; then
+    MIKROTIK_ROUTER="${ARG#--router=}"
+  elif [[ "$ARG" =~ ^--username= ]]; then
+    MIKROTIK_USERNAME="${ARG#--username=}"
+  elif [[ "$ARG" =~ ^--warning= ]]; then
+    OFFSET_WARNING="${ARG#--warning=}"
+  elif [[ "$ARG" =~ ^--critical= ]]; then
+    OFFSET_CRITICAL="${ARG#--critical=}"
+  fi
+done
+
+# Check if all needed arguments are giving
+if [ -z "$MIKROTIK_ROUTER" ]; then
+  echo "You've missed --router=" >&2
+  exit $STATE_UNKNOWN
+elif [ -z "$MIKROTIK_USERNAME" ]; then
+  echo "You've missed --username=" >&2
+  exit $STATE_UNKNOWN
+elif [ $OFFSET_WARNING -eq 0 ]; then
+  echo "You've missed --warning=" >&2
+  exit $STATE_UNKNOWN
+elif [ $OFFSET_CRITICAL -eq 0 ]; then
+  echo "You've missed --critical=" >&2
+  exit $STATE_UNKNOWN
+fi
+
+# Run expect script and iterate over BGP peers
+while read PEER; do
+  # Set content variable to true
+  GOT_CONTENT=1
+
+  # Increment variable for total BGP sessions
+  BGP_SESSIONS_TOTAL=$(( $BGP_SESSIONS_TOTAL + 1 ))
+
+  # Get BGP state
+  BGP_STATE="$(cut -d' ' -f2 <<<"$PEER")"
+
+  # Get temporary data
+  TMP="$(cut -d' ' -f3- <<<"$PEER" | sed -e 's/^\s*//g' -e 's/ \+ /\t/g')"
+
+  # Get peer variables
+  NAME="$(cut -f1 -d$'\t' <<<"$TMP")"
+  REMOTE_PEER="$(cut -f2 -d$'\t' <<<"$TMP")"
+  REMOTE_AS="$(cut -f3 -d$'\t' <<<"$TMP")"
+
+  # If BGP state is empty session is down
+  if [ "$BGP_STATE" = '' ]; then
+    # Increment variable for down BGP sessions
+    BGP_SESSIONS_DOWN=$(( $BGP_SESSIONS_DOWN + 1 ))
+
+    # Add error to errors variable
+    if [ -z "$ERR_MSG" ]; then
+      ERR_MSG="${NAME} (${REMOTE_PEER} / ${REMOTE_AS})"
+    else
+      ERR_MSG="${ERR_MSG}, ${NAME} (${REMOTE_PEER} / ${REMOTE_AS})"
+    fi
+  elif [ "$BGP_STATE" = 'X' ]; then
+    # Increment variable for disabled BGP sessions
+    BGP_SESSIONS_DISABLED=$(( $BGP_SESSIONS_DISABLED + 1 ))
+  fi
+done < <(ssh "${MIKROTIK_USERNAME}@${MIKROTIK_ROUTER}" '/routing bgp peer print' | sed -n -e '/INSTANCE/,$p' | head -n -1 | tail -n +2)
+
+# Remove temporary file
+if [ -n "$TMP_FILE" -a -e "$TMP_FILE" ]; then
+  rm "$TMP_FILE"
+fi
+
+# State type messages
+if [ $GOT_CONTENT -eq 0 ]; then
+  echo 'Could not get any BGP informations' >&2
+  exit $STATE_UNKNOWN
+elif [ $BGP_SESSIONS_DOWN -gt $OFFSET_CRITICAL ]; then
+  ERR_CODE=$STATE_CRITICAL
+  ERR_MSG="CRITICAL: ${ERR_MSG}"
+elif [ $BGP_SESSIONS_DOWN -gt $OFFSET_WARNING ]; then
+  ERR_CODE=$STATE_WARNING
+  ERR_MSG="WARNING: ${ERR_MSG}"
+elif [ -z "$ERR_MSG" ]; then
+  ERR_MSG='OK: All BGP sessions up'
+else
+  ERR_MSG="OK: ${ERR_MSG}"
+fi
+
+# Display error message
+echo "${ERR_MSG} | bgp_sessions_total=${BGP_SESSIONS_TOTAL}, bgp_sessions_down=${BGP_SESSIONS_DOWN}, bgp_sessions_disabled=${BGP_SESSIONS_DISABLED}"
+
+# Exit with error code
+exit $ERR_CODE
