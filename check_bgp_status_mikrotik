@@ -60,7 +60,7 @@ MIKROTIK_USERNAME=''
 
 # Parse arguments
 for ARG in "$@"; do
-  if [ "$ARG" = '-h' -o "$ARG" = '--help' ]; then
+  if [ "$ARG" = '-h' ] || [ "$ARG" = '--help' ]; then
     show_help
   elif [[ "$ARG" =~ ^--router= ]]; then
     MIKROTIK_ROUTER="${ARG#--router=}"
@@ -80,21 +80,21 @@ if [ -z "$MIKROTIK_ROUTER" ]; then
 elif [ -z "$MIKROTIK_USERNAME" ]; then
   echo "You've missed --username=" >&2
   exit $STATE_UNKNOWN
-elif [ $OFFSET_WARNING -eq 0 ]; then
+elif [ "$OFFSET_WARNING" -eq 0 ]; then
   echo "You've missed --warning=" >&2
   exit $STATE_UNKNOWN
-elif [ $OFFSET_CRITICAL -eq 0 ]; then
+elif [ "$OFFSET_CRITICAL" -eq 0 ]; then
   echo "You've missed --critical=" >&2
   exit $STATE_UNKNOWN
 fi
 
 # Run expect script and iterate over BGP peers
-while read PEER; do
+while read -r PEER; do
   # Set content variable to true
   GOT_CONTENT=1
 
   # Increment variable for total BGP sessions
-  BGP_SESSIONS_TOTAL=$(( $BGP_SESSIONS_TOTAL + 1 ))
+  BGP_SESSIONS_TOTAL=$(( BGP_SESSIONS_TOTAL + 1 ))
 
   # Get BGP state
   BGP_STATE="$(cut -d' ' -f2 <<<"$PEER")"
@@ -110,7 +110,7 @@ while read PEER; do
   # If BGP state is empty session is down
   if [ "$BGP_STATE" = '' ]; then
     # Increment variable for down BGP sessions
-    BGP_SESSIONS_DOWN=$(( $BGP_SESSIONS_DOWN + 1 ))
+    BGP_SESSIONS_DOWN=$(( BGP_SESSIONS_DOWN + 1 ))
 
     # Add error to errors variable
     if [ -z "$ERR_MSG" ]; then
@@ -120,23 +120,23 @@ while read PEER; do
     fi
   elif [ "$BGP_STATE" = 'X' ]; then
     # Increment variable for disabled BGP sessions
-    BGP_SESSIONS_DISABLED=$(( $BGP_SESSIONS_DISABLED + 1 ))
+    BGP_SESSIONS_DISABLED=$(( BGP_SESSIONS_DISABLED + 1 ))
   fi
 done < <(ssh "${MIKROTIK_USERNAME}@${MIKROTIK_ROUTER}" '/routing bgp peer print' | sed -n -e '/INSTANCE/,$p' | head -n -1 | tail -n +2)
 
 # Remove temporary file
-if [ -n "$TMP_FILE" -a -e "$TMP_FILE" ]; then
+if [ -n "$TMP_FILE" ] && [ -e "$TMP_FILE" ]; then
   rm "$TMP_FILE"
 fi
 
 # State type messages
-if [ $GOT_CONTENT -eq 0 ]; then
+if [ "$GOT_CONTENT" -eq 0 ]; then
   echo 'Could not get any BGP informations' >&2
   exit $STATE_UNKNOWN
-elif [ $BGP_SESSIONS_DOWN -gt $OFFSET_CRITICAL ]; then
+elif [ "$BGP_SESSIONS_DOWN" -gt "$OFFSET_CRITICAL" ]; then
   ERR_CODE=$STATE_CRITICAL
   ERR_MSG="CRITICAL: ${ERR_MSG}"
-elif [ $BGP_SESSIONS_DOWN -gt $OFFSET_WARNING ]; then
+elif [ "$BGP_SESSIONS_DOWN" -gt "$OFFSET_WARNING" ]; then
   ERR_CODE=$STATE_WARNING
   ERR_MSG="WARNING: ${ERR_MSG}"
 elif [ -z "$ERR_MSG" ]; then
